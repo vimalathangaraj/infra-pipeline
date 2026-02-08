@@ -1,2 +1,2 @@
 # infra-pipeline
-# i have updated my .github
+# i have updated my .github/workflows
