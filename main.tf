@@ -1,40 +1,83 @@
-# --- S3 bucket (application bucket, NOT terraform state bucket) ---
-resource "aws_s3_bucket" "app" {
-  bucket = var.bucket_name
+# -------------------------
+# DATA
+# -------------------------
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# -------------------------
+# VPC
+# -------------------------
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 
   tags = {
-    Name = "${var.name_prefix}-bucket"
+    Name = "${var.name_prefix}-vpc"
   }
 }
 
-resource "aws_s3_bucket_versioning" "app" {
-  bucket = aws_s3_bucket.app.id
-  versioning_configuration {
-    status = "Enabled"
+# -------------------------
+# INTERNET GATEWAY
+# -------------------------
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.name_prefix}-igw"
   }
 }
 
-resource "aws_s3_bucket_public_access_block" "app" {
-  bucket = aws_s3_bucket.app.id
+# -------------------------
+# PUBLIC SUBNET
+# -------------------------
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidr
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
 
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
+  tags = {
+    Name = "${var.name_prefix}-public-subnet"
+  }
 }
 
-# --- Security group for instance (basic) ---
+# -------------------------
+# ROUTE TABLE
+# -------------------------
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-public-rt"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
+}
+
+# -------------------------
+# SECURITY GROUP
+# -------------------------
 resource "aws_security_group" "web" {
   name        = "${var.name_prefix}-sg"
   description = "Allow SSH and HTTP"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = aws_vpc.main.id
 
   ingress {
     description = "SSH"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allowed_ssh_cidr]
   }
 
   ingress {
@@ -46,7 +89,6 @@ resource "aws_security_group" "web" {
   }
 
   egress {
-    description = "All outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -58,17 +100,24 @@ resource "aws_security_group" "web" {
   }
 }
 
-data "aws_vpc" "default" {
-  default = true
-}
 
-# --- EC2 instance ---
+
+
+
+
+
+
+# -------------------------
+# EC2 INSTANCE
+# -------------------------
 resource "aws_instance" "vm" {
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  vpc_security_group_ids  = [aws_security_group.web.id]
+  ami           = var.ami_id
+  instance_type = var.instance_type
 
-  # only set key_name if provided
+  subnet_id              = aws_subnet.public.id
+  vpc_security_group_ids = [aws_security_group.web.id]
+  associate_public_ip_address = true
+
   key_name = var.key_name != "" ? var.key_name : null
 
   tags = {
